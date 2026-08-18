@@ -31,6 +31,9 @@ export interface LlcDesignRequest {
   // 匝数（可选；不指定则由匝数搜索自动确定）
   primaryTurns?: number
   secondaryTurns?: number
+  // 输出电容（环路小信号模型用）
+  outputCapF?: number
+  outputCapEsrMohm?: number
   // 搜索与工作点
   maxSecondaryTurns?: number
   maxPrimaryTurns?: number
@@ -175,6 +178,8 @@ export function buildSpec(request: LlcDesignRequest): LLCDesignSpec {
     rectifierEquivalentDropV: request.rectifierDropV ?? DEFAULT_SPEC.rectifierEquivalentDropV,
     primaryTurns: request.primaryTurns ?? DEFAULT_SPEC.primaryTurns,
     secondaryTurns: request.secondaryTurns ?? DEFAULT_SPEC.secondaryTurns,
+    outputCapacitanceF: (request.outputCapF ?? DEFAULT_SPEC.outputCapacitanceF * 1e6) * 1e-6,
+    outputCapEsrOhm: (request.outputCapEsrMohm ?? DEFAULT_SPEC.outputCapEsrOhm * 1e3) * 1e-3,
     ambientTemperatureC: request.ambientTempC ?? DEFAULT_SPEC.ambientTemperatureC,
     windingTemperatureC: request.windingTempC ?? DEFAULT_SPEC.windingTemperatureC,
   }
@@ -347,3 +352,48 @@ export function designLlc(request: LlcDesignRequest): LlcDesignOutput {
   })
   return toOutput(result)
 }
+
+/**
+ * 从磁芯库（cores.ts）构造变压器设计输入。
+ * AL/µe 用材料初始磁导率估计（无气隙 AL = µ0·µe·Ae/le）；
+ * 正式设计请用厂商数据表 AL/µe 替换。
+ */
+export function coreRecordToFerriteInput(
+  rec: import('../data/cores.ts').CoreRecord,
+  materialKey = 'TDK_N87_REF',
+): FerriteCoreInput {
+  const material = MATERIALS.find(m => m.key === materialKey) ?? MATERIALS[0]!
+  const muE = material.muI25
+  const aeM2 = rec.aeMm2 * 1e-6
+  const leM = rec.leMm * 1e-3
+  const alNh = (4.0e-7 * Math.PI * muE * aeM2 / leM) * 1e9
+  const grade = material.grade
+  return {
+    presetKey: rec.partNumber,
+    manufacturer: rec.manufacturer,
+    partNumber: rec.partNumber,
+    shape: rec.shape,
+    materialKey,
+    materialGrade: grade,
+    aeMm2: rec.aeMm2,
+    aminMm2: rec.aminMm2,
+    leMm: rec.leMm,
+    veMm3: rec.veMm3,
+    sigmaLOverAPerMm: 0.5,
+    alNh,
+    muE,
+    windingAreaMm2: rec.awMm2,
+    meanTurnLengthMm: rec.mltPrimaryMm,
+    usableWindingWidthMm: rec.windowWidthMm,
+    arUohm: 16.5,
+    coreMassG: rec.coreMassG,
+    thermalResistanceKPerW: rec.thermalResistanceKPerW,
+    datasheetLossRefW: 8.0,
+    datasheetLossRefFrequencyHz: 100000.0,
+    datasheetLossRefBT: 0.2,
+    datasheetLossRefTemperatureC: 100.0,
+  }
+}
+
+import { MATERIALS } from '../data/materials.ts'
+import type { FerriteCoreInput } from '../magnetics/transformerDesigner.ts'

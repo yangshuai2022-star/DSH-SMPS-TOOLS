@@ -66,6 +66,9 @@ export interface LoopTuneRequest {
   primaryTurns?: number
   secondaryTurns?: number
   corePreset?: string
+  // 输出电容（环路小信号模型用）
+  outputCapF?: number
+  outputCapEsrMohm?: number
 }
 
 export interface LoopTuneOutput {
@@ -182,6 +185,8 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     q: request.q,
     primaryTurns: request.primaryTurns,
     secondaryTurns: request.secondaryTurns,
+    outputCapF: request.outputCapF,
+    outputCapEsrMohm: request.outputCapEsrMohm,
   })
 
   // 匝数搜索：若未显式指定匝数，先按专有算法确定 Np:Ns（与 llc_design 一致），
