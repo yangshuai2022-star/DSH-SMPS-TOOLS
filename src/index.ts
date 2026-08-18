@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
 import { designLlc, type LlcDesignOutput, type LlcDesignRequest } from './engine/index.ts'
 import { runLoopTune, type LoopTuneOutput, type LoopTuneRequest } from './engine/loopEngine.ts'
+import { analyzeController, type AnalyzeControllerRequest, type ControllerAnalysisOutput } from './engine/analyzeController.ts'
 
 export const name = 'llc-design-plugin'
 
@@ -19,6 +20,7 @@ export const inject = ['tools']
 export function apply(ctx: Context) {
   registerDesignTool(ctx)
   registerTuneLoopTool(ctx)
+  registerAnalyzeControllerTool(ctx)
 }
 
 function registerDesignTool(ctx: Context) {
@@ -181,10 +183,6 @@ function formatTuneResult(r: LoopTuneOutput): string {
     'LLC 电压环自动整定结果（Power Design Toolkit 算法）',
     '='.repeat(64),
     `控制器：${r.controllerKind.toUpperCase()}（${r.converged ? '已收敛' : '未完全收敛'}）`,
-    `系数（10 位小数）：${JSON.stringify(r.controller.coefficients)}`,
-    `z 域传函：num = [${r.controller.numeratorZ.map(v => v.toFixed(10)).join(', ')}]`,
-    `         den = [${r.controller.denominatorZ.map(v => v.toFixed(10)).join(', ')}]`,
-    `差异方程：${r.controller.differenceEquation}`,
     `工作点：fsw = ${r.operatingPoint.fswKhz.toFixed(1)} kHz，FM command = ${r.operatingPoint.fmCommandPu.toFixed(4)}，FM 增益 = ${r.operatingPoint.fmGainHzPerPu.toExponential(3)} Hz/pu`,
     `稳定裕度：穿越 ${r.margins.crossoverHz.toFixed(1)} Hz，相位裕度 ${r.margins.phaseMarginDeg.toFixed(1)}°，增益裕度 ${r.margins.gainMarginDb.toFixed(1)} dB`,
     `离散闭环稳定：${r.discreteStable ? '是' : '否'}（迭代 ${r.iterations} 次）`,
@@ -197,6 +195,23 @@ function formatTuneResult(r: LoopTuneOutput): string {
   if (r.warnings.length > 0) {
     lines.push('', '警告：')
     for (const w of r.warnings) lines.push(`  - ${w}`)
+  }
+  // 系数格式：2P2Z 输出 Numerator/Denominator/GAIN（归一化 B0 外置，完整 double 精度）
+  if (r.controllerKind === '2p2z' && r.normalized2P2Z) {
+    const n = r.normalized2P2Z.float
+    lines.push('', '系数（归一化，float64 完整精度）：')
+    lines.push(`  Numerator:   1、${n.B1.toPrecision(17)}、${n.B2.toPrecision(17)}`)
+    lines.push(`  Denominator: 1、${n.A1.toPrecision(17)}、${n.A2.toPrecision(17)}`)
+    lines.push(`  GAIN:        ${n.B0.toPrecision(17)}`)
+    lines.push('', '等效 z 域传函：')
+    lines.push(`  num = [${r.controller.numeratorZ.map(v => v.toPrecision(17)).join(', ')}]`)
+    lines.push(`  den = [${r.controller.denominatorZ.map(v => v.toPrecision(17)).join(', ')}]`)
+    lines.push(`  差分方程：${r.controller.differenceEquation}`)
+  } else {
+    lines.push('', `系数：${JSON.stringify(r.controller.coefficients, (k, v) => typeof v === 'number' ? Number(v.toPrecision(17)) : v)}`)
+    lines.push(`z 域传函：num = [${r.controller.numeratorZ.map(v => v.toPrecision(17)).join(', ')}]`)
+    lines.push(`         den = [${r.controller.denominatorZ.map(v => v.toPrecision(17)).join(', ')}]`)
+    lines.push(`差分方程：${r.controller.differenceEquation}`)
   }
   appendAssumptions(lines, r.assumptions)
   lines.push('', '═══ 32 位定点（IQ27 数据域 / IQ20·IQ24·IQ27 系数域）═══')
@@ -259,4 +274,72 @@ function appendAssumptions(
       lines.push(`  - ${item.param} = ${item.value}`)
     }
   }
+}
+
+
+function registerAnalyzeControllerTool(ctx: Context) {
+  ctx.tools.register(defineTool({
+    name: 'llc_analyze_controller',
+    description:
+      '分析自定义数字控制器（归一化 2P2Z，B0 外置增益）并输出完整设计报告：' +
+      '零极点/稳定性/直流增益识别 + IQ27 定点整数参数 + 归一化 DF-IIt C99 代码 + ASCII Bode 图。' +
+      '输入归一化系数：H(z) = B0·(1 + B1·z⁻¹ + B2·z⁻²)/(1 + A1·z⁻¹ + A2·z⁻²)。' +
+      '典型：B0=0.00186, B1=2, B2=1, A1=-1.874, A2=0.882。',
+
+    parameters: {
+      B0: { type: 'number', required: true, description: '外置增益 B0（b0）' },
+      B1: { type: 'number', required: true, description: '归一化分子系数 B1 = b1/b0' },
+      B2: { type: 'number', required: true, description: '归一化分子系数 B2 = b2/b0' },
+      A1: { type: 'number', required: true, description: '分母系数 A1' },
+      A2: { type: 'number', required: true, description: '分母系数 A2' },
+      sampleTimeUs: { type: 'number', description: '采样周期（µs），默认 20' },
+      showBode: { type: 'boolean', description: '是否输出 Bode 图，默认 true' },
+    },
+
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [
+        { type: 'text', text: formatAnalyzeResult(value as unknown as ControllerAnalysisOutput) },
+      ],
+    },
+
+    async execute(args: AnalyzeControllerRequest) {
+      return analyzeController(args) as unknown as JsonValue
+    },
+  }))
+}
+
+function formatAnalyzeResult(r: ControllerAnalysisOutput): string {
+  const a = r.analysis
+  const lines: string[] = [
+    '控制器分析报告（归一化 2P2Z）',
+    '='.repeat(64),
+    `识别：${a.type}`,
+    `传递函数：H(z) = B0·(1 + B1·z⁻¹ + B2·z⁻²)/(1 + A1·z⁻¹ + A2·z⁻²)`,
+    `浮点（10 位小数）：`,
+    `  B0 = ${r.float.B0.toFixed(10)}   B1 = ${r.float.B1.toFixed(10)}   B2 = ${r.float.B2.toFixed(10)}`,
+    `  A1 = ${r.float.A1.toFixed(10)}   A2 = ${r.float.A2.toFixed(10)}`,
+    '',
+    '零极点与稳定性：',
+    `  零点：${a.zeros.map(z => `(${z.re.toFixed(4)}${z.im >= 0 ? '+' : ''}${z.im.toFixed(4)}j)`).join(' ') || '（无）'}`,
+    `  极点：${a.poles.map(p => `(${p.re.toFixed(4)}${p.im >= 0 ? '+' : ''}${p.im.toFixed(4)}j, |z|=${p.magnitude.toFixed(4)}, f=${p.freqHz.toFixed(1)}Hz)`).join(' ') || '（无）'}`,
+    `  稳定：${a.stable ? '✅ 是' : '❌ 否'}   直流增益 H(1) = ${a.dcGain.toFixed(6)}   极点-单位圆余量 = ${a.poleMarginLsb.toExponential(2)} LSB`,
+    '',
+    'IQ27 定点整数参数（B1/B2/A1/A2 全 IQ27，B0 增益 IQ20）：',
+  ]
+  for (const [name, c] of Object.entries(r.fixed)) {
+    lines.push(`  ${name.padEnd(3)} = ${String(c.int).padStart(12)}   Q${c.q}  （浮点 ${c.float.toFixed(10)}）`)
+  }
+  lines.push('', '溢出核算：')
+  for (const b of r.budget) {
+    lines.push(`  ${b.item}: ${b.upper.toExponential(4)} vs ${b.limit}  ${b.ok ? '✓' : '✗'}`)
+  }
+  if (r.bodeAscii) {
+    lines.push('', r.bodeAscii)
+  }
+  lines.push('', '归一化 DF-IIt C99（可直接烧录）：')
+  lines.push('```c')
+  lines.push(r.c99)
+  lines.push('```')
+  return lines.join('\n')
 }
