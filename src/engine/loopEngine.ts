@@ -71,6 +71,8 @@ export interface LoopTuneRequest {
   // 输出电容（环路小信号模型用）
   outputCapF?: number
   outputCapEsrMohm?: number
+  /** 是否在输出中包含 ASCII Bode 图（默认 true；false 关闭以精简报告） */
+  showBode?: boolean
 }
 
 export interface LoopTuneOutput {
@@ -276,15 +278,17 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     iterations: result.iterations,
     notes: result.notes,
     warnings: result.analysis.warnings,
-    bodeAscii: renderAsciiBode(
-      result.analysis.frequenciesHz,
-      result.analysis.responses['open_loop_nominal']!,
-      {
-        fcHz: result.achievedCrossoverHz,
-        phaseMarginDeg: result.achievedPhaseMarginDeg,
-        gainMarginDb: result.achievedGainMarginDb,
-      },
-    ),
+    bodeAscii: (request.showBode ?? true)
+      ? renderAsciiBode(
+          result.analysis.frequenciesHz,
+          result.analysis.responses['open_loop_nominal']!,
+          {
+            fcHz: result.achievedCrossoverHz,
+            phaseMarginDeg: result.achievedPhaseMarginDeg,
+            gainMarginDb: result.achievedGainMarginDb,
+          },
+        )
+      : '',
   }
 }
 
