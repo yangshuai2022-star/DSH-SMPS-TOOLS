@@ -189,6 +189,7 @@ function formatTuneResult(r: LoopTuneOutput): string {
     `稳定裕度：穿越 ${r.margins.crossoverHz.toFixed(1)} Hz，相位裕度 ${r.margins.phaseMarginDeg.toFixed(1)}°，增益裕度 ${r.margins.gainMarginDb.toFixed(1)} dB`,
     `离散闭环稳定：${r.discreteStable ? '是' : '否'}（迭代 ${r.iterations} 次）`,
   ]
+  lines.push('', r.bodeAscii)
   if (r.notes.length > 0) {
     lines.push('', '说明：')
     for (const n of r.notes) lines.push(`  - ${n}`)

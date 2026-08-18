@@ -9,6 +9,7 @@ import {
   computeFixedPoint, fixedPointTable, renderFixedC99, renderFixedLibInitC99,
 } from '../control/qformat.ts'
 import { collectTuneAssumptions, type AssumptionReport } from './assumptions.ts'
+import { renderAsciiBode } from './asciiBode.ts'
 import { cloneSpec } from '../core/spec.ts'
 import {
   synthesizeTransformer, DEFAULT_SYNTHESIS_SETTINGS,
@@ -113,6 +114,8 @@ export interface LoopTuneOutput {
   iterations: number
   notes: string[]
   warnings: string[]
+  /** ASCII Bode 图（文本对话直接展示） */
+  bodeAscii: string
 }
 
 /** 生成 Direct Form I C99 控制器代码（对应 export_controller_c99） */
@@ -273,6 +276,15 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     iterations: result.iterations,
     notes: result.notes,
     warnings: result.analysis.warnings,
+    bodeAscii: renderAsciiBode(
+      result.analysis.frequenciesHz,
+      result.analysis.responses['open_loop_nominal']!,
+      {
+        fcHz: result.achievedCrossoverHz,
+        phaseMarginDeg: result.achievedPhaseMarginDeg,
+        gainMarginDb: result.achievedGainMarginDb,
+      },
+    ),
   }
 }
 
