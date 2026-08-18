@@ -1,0 +1,4 @@
+# LLC 设计插件 —— headless 加载验证
+- insert:
+    - id: llc-design-plugin
+      name: '/home/yangshuai/task/llc-design-plugin/src/index.ts'
