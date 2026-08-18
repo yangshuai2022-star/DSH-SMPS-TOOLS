@@ -197,7 +197,7 @@ export function toOutput(result: TransformerSynthesisResult): LlcDesignOutput {
   return {
     method: 'proprietary-toolkit-v7.5',
     feasible: result.feasible,
-    assumptions: { assumed: [], missing: [] },
+    assumptions: { questions: [], assumed: [] },
     core: {
       presetKey: core.presetKey,
       partNumber: core.partNumber,

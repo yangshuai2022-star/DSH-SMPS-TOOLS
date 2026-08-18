@@ -227,15 +227,23 @@ function formatTuneResult(r: LoopTuneOutput): string {
   return lines.join('\n')
 }
 
-/** 渲染参数假设/缺失提示（不脑补原则） */
-function appendAssumptions(lines: string[], a: { assumed: Array<{ param: string; value: string; why: string }>; missing: string[] }): void {
-  if (a.missing.length > 0) {
-    lines.push('', `⚠️ 缺失关键参数（建议提供）：${a.missing.join('、')}`)
+/** 渲染交互式问答引导 + 参数假设说明（不脑补原则） */
+function appendAssumptions(
+  lines: string[],
+  a: { questions: Array<{ param: string; prompt: string; options: string[]; default: string }>; assumed: Array<{ param: string; value: string; why: string }> },
+): void {
+  if (a.questions.length > 0) {
+    lines.push('', '❓ 需要您确认/补充的参数 —— 请逐项回答（点选或填数字），回答后重新调用即可：')
+    a.questions.forEach((q, i) => {
+      lines.push(`  ${i + 1}. ${q.prompt}`)
+      q.options.forEach((opt, j) => lines.push(`     ${String.fromCharCode(65 + j)}. ${opt}`))
+      lines.push(`     （若不回答将使用默认：${q.default}）`)
+    })
   }
   if (a.assumed.length > 0) {
-    lines.push('', '⚠️ 以下参数未显式提供，使用了默认值 —— 请确认：')
+    lines.push('', '⚠️ 以下参数本次使用默认值，请确认（对应上面的问题）：')
     for (const item of a.assumed) {
-      lines.push(`  - ${item.param} = ${item.value}（${item.why}）`)
+      lines.push(`  - ${item.param} = ${item.value}`)
     }
   }
 }
