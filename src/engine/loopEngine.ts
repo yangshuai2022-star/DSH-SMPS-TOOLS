@@ -2,12 +2,47 @@
  * 环路整定引擎适配层：用户输入 → tuneVoltageLoop → 可序列化输出（含 C99 片段）
  */
 
-import { buildSpec, type LlcDesignRequest } from './index.ts'
+import { buildSpec, resolveCorePreset, type LlcDesignRequest } from './index.ts'
 import { tuneVoltageLoop, type TuningResult } from '../control/autotune.ts'
 import { controllerTransferFunction, controllerKind } from '../control/digitalLoop.ts'
 import {
   computeFixedPoint, fixedPointTable, renderFixedC99, renderFixedLibInitC99,
 } from '../control/qformat.ts'
+import { cloneSpec } from '../core/spec.ts'
+import {
+  synthesizeTransformer, DEFAULT_SYNTHESIS_SETTINGS,
+  type FerriteCoreInput,
+} from '../magnetics/transformerDesigner.ts'
+import type { FerriteCorePreset } from '../data/corePresets.ts'
+
+/** 磁芯预设 → 变压器设计输入（与 engine/index.ts 的 designLlc 一致） */
+function presetToFerriteInput(preset: FerriteCorePreset): FerriteCoreInput {
+  return {
+    presetKey: preset.presetKey,
+    manufacturer: preset.manufacturer,
+    partNumber: preset.partNumber,
+    shape: preset.shape,
+    materialKey: preset.materialKey,
+    materialGrade: preset.materialGrade,
+    aeMm2: preset.aeMm2,
+    aminMm2: preset.aminMm2,
+    leMm: preset.leMm,
+    veMm3: preset.veMm3,
+    sigmaLOverAPerMm: preset.sigmaLOverAPerMm,
+    alNh: preset.alNh,
+    muE: preset.muE,
+    windingAreaMm2: preset.windingAreaMm2,
+    meanTurnLengthMm: preset.meanTurnLengthMm,
+    usableWindingWidthMm: preset.usableWindingWidthMm,
+    arUohm: preset.arUohm,
+    coreMassG: preset.coreMassG,
+    thermalResistanceKPerW: preset.thermalResistanceKPerW,
+    datasheetLossRefW: preset.datasheetLossRefW,
+    datasheetLossRefFrequencyHz: preset.datasheetLossRefFrequencyHz,
+    datasheetLossRefBT: preset.datasheetLossRefBT,
+    datasheetLossRefTemperatureC: preset.datasheetLossRefTemperatureC,
+  }
+}
 
 export interface LoopTuneRequest {
   // 电气规格（与 llc_design 工具共用字段）
@@ -27,6 +62,10 @@ export interface LoopTuneRequest {
   controllerKind?: 'pi' | 'pif' | '2p2z'
   sampleTimeUs?: number
   loadFraction?: number
+  // 匝数（可选；不指定则由匝数搜索自动确定，与 llc_design 一致）
+  primaryTurns?: number
+  secondaryTurns?: number
+  corePreset?: string
 }
 
 export interface LoopTuneOutput {
@@ -130,7 +169,7 @@ export function renderControllerC99(
 }
 
 export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
-  const spec = buildSpec({
+  let spec = buildSpec({
     vout: request.vout,
     pout: request.pout,
     frKhz: request.frKhz,
@@ -141,7 +180,24 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     topology: request.topology,
     k: request.k,
     q: request.q,
+    primaryTurns: request.primaryTurns,
+    secondaryTurns: request.secondaryTurns,
   })
+
+  // 匝数搜索：若未显式指定匝数，先按专有算法确定 Np:Ns（与 llc_design 一致），
+  // 否则默认匝数对任意 Vout 可能增益失配（如 12V 输出需 n≈16）。
+  // 注意：整定只需匝比正确；磁芯/窗口可行性由 llc_design 单独报告。
+  if (request.primaryTurns === undefined || request.secondaryTurns === undefined) {
+    const preset = resolveCorePreset(request.corePreset)
+    const result = synthesizeTransformer(spec, presetToFerriteInput(preset), {
+      ...DEFAULT_SYNTHESIS_SETTINGS,
+      workpointScope: 'all',
+    })
+    spec = cloneSpec(spec, {
+      primaryTurns: result.primaryTurns,
+      secondaryTurns: result.secondaryTurns,
+    })
+  }
   const sampleTimeS = (request.sampleTimeUs ?? 20) * 1e-6
   const result: TuningResult = tuneVoltageLoop(spec, {
     crossoverHz: request.crossoverKhz !== undefined ? request.crossoverKhz * 1e3 : undefined,

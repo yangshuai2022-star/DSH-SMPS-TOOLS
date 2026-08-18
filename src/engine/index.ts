@@ -28,6 +28,9 @@ export interface LlcDesignRequest {
   rectifierDropV?: number
   // 磁芯预设
   corePreset?: string
+  // 匝数（可选；不指定则由匝数搜索自动确定）
+  primaryTurns?: number
+  secondaryTurns?: number
   // 搜索与工作点
   maxSecondaryTurns?: number
   maxPrimaryTurns?: number
@@ -170,6 +173,8 @@ export function buildSpec(request: LlcDesignRequest): LLCDesignSpec {
     lnRatio: request.k ?? DEFAULT_SPEC.lnRatio,
     qFullLoad: request.q ?? DEFAULT_SPEC.qFullLoad,
     rectifierEquivalentDropV: request.rectifierDropV ?? DEFAULT_SPEC.rectifierEquivalentDropV,
+    primaryTurns: request.primaryTurns ?? DEFAULT_SPEC.primaryTurns,
+    secondaryTurns: request.secondaryTurns ?? DEFAULT_SPEC.secondaryTurns,
     ambientTemperatureC: request.ambientTempC ?? DEFAULT_SPEC.ambientTemperatureC,
     windingTemperatureC: request.windingTempC ?? DEFAULT_SPEC.windingTemperatureC,
   }

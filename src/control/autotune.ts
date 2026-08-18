@@ -131,7 +131,7 @@ export function phaseMarginFromPhaseDeg(phaseDeg: number): number {
   return 180 + phase
 }
 
-function makeGridWithFc(sampleTimeS: number, fsw: number, fc: number): number[] {
+export function makeGridWithFc(sampleTimeS: number, fsw: number, fc: number): number[] {
   const nyquist = 0.5 / sampleTimeS
   const upper = Math.min(0.49 * nyquist, 0.25 * fsw)
   const lower = Math.max(0.1, upper / 2e5)
@@ -195,68 +195,49 @@ export function tuneVoltageLoop(
 
   for (let iter = 0; iter < maxIter; iter++) {
     iterations = iter + 1
-    let ctrl: ControllerConfig
-    switch (kind) {
-      case 'pi':
-        ctrl = makePiConfig(kp, ti, sampleTime)
-        break
-      case 'pif':
-        ctrl = makePifConfig(kp, ti, lpfCutoff, sampleTime)
-        break
-      case '2p2z': {
-        // 两零点（fc/zr、fc/2zr）+ 两高频极点（限 Nyquist 内），增益由迭代承担
-        ctrl = make2P2ZForTarget(fc, hpRatio, sampleTime, kp, zeroRatio)
-        break
-      }
+
+    // ── 阶段 1：固定 Ti，内循环收敛 Kp 使 |OL(fc)| = 1 ──────────────
+    // Kp 与 Ti 都会影响 |OL(fc)|：若同时调整会互相干扰永不收敛；
+    // 因此内循环只动 Kp，Ti 在外循环按 PM 调整。
+    let r: DigitalLoopAnalysisResult | null = null
+    let olFc: { re: number; im: number; phaseDeg: number } | null = null
+    for (let inner = 0; inner < 15; inner++) {
+      const ctrl = makeController(kind, kp, ti, fc, hpRatio, zeroRatio, sampleTime, lpfCutoff)
+      r = build(ctrl)
+      olFc = evaluateOpenLoopAt(r, fc)
+      const mag = Math.hypot(olFc.re, olFc.im)
+      const kpCorrection = mag > 1e-12 ? 1 / mag : 1.0
+      kp = clamp(kp * kpCorrection, 1e-9, 1e6)
+      if (Math.abs(mag - 1) < 0.005) break
     }
-    const r = build(ctrl)
-    const olFc = evaluateOpenLoopAt(r, fc)
-    const mag = Math.hypot(olFc.re, olFc.im)
+
+    // ── 阶段 2：评估 PM，必要时调整 Ti ──────────────────────────────
+    if (r === null || olFc === null) throw new Error('autotune: iteration produced no analysis')
     const pm = phaseMarginFromPhaseDeg(olFc.phaseDeg)
-
-    // 增益穿越修正：Kp ×= 1/|OL(fc)|
-    const kpCorrection = mag > 1e-12 ? 1 / mag : 1.0
-    if (kind === '2p2z') {
-      // 2P2Z 的 gain 参数即整体增益
-      kp = clamp(kp * kpCorrection, 1e-9, 1e6)
-    } else {
-      kp = clamp(kp * kpCorrection, 1e-9, 1e6)
-    }
-
     const pmErr = pm - pmTarget
-    // 2P2Z：结构（零极点）固定，只收敛增益；相位由结构决定
-    const p2zGainOnly = kind === '2p2z'
-    if (Math.abs(pmErr) < 1.5 && Math.abs(mag - 1) < 0.05) {
-      finalCtrl = ctrl
-      finalAnalysis = r
-      achievedPm = pm
-      achievedGc = fc
+
+    finalCtrl = makeController(kind, kp, ti, fc, hpRatio, zeroRatio, sampleTime, lpfCutoff)
+    finalAnalysis = r
+    achievedPm = pm
+    achievedGc = fc
+
+    if (Math.abs(pmErr) < 1.5) {
       converged = true
       break
     }
-    if (p2zGainOnly) {
-      // 增益已收敛但 PM 不达标 → 结构决定，报告可达 PM
-      if (Math.abs(mag - 1) < 0.05) {
-        finalCtrl = ctrl
-        finalAnalysis = r
-        achievedPm = pm
-        achievedGc = fc
-        converged = true
-        notes.push(
-          `2P2Z 结构在 fc=${fc.toFixed(0)} Hz 下可达 PM ${pm.toFixed(1)}°（目标 ${pmTarget}°）；` +
-          '如需要不同相位裕度，请调整目标带宽或零点/极点配置。',
-        )
-        break
-      }
+    if (kind === '2p2z') {
+      // 2P2Z：结构决定相位，增益已收敛即视为达标
+      converged = true
+      notes.push(
+        `2P2Z 结构在 fc=${fc.toFixed(0)} Hz 下可达 PM ${pm.toFixed(1)}°（目标 ${pmTarget}°）；` +
+        '如需要不同相位裕度，请调整目标带宽或零点/极点配置。',
+      )
+      break
     }
-    // 物理极限检测：Ti 已到边界仍无法达标 → plant 相位滞后不足/过剩
+    // 物理极限检测：Ti 到边界仍无法达标
     const atTiFloor = ti <= sampleTime * 1.01
     const atTiCeil = ti >= 10.0 * 0.99
-    if (kind !== '2p2z' && ((atTiFloor && pmErr > 0) || (atTiCeil && pmErr < 0))) {
-      finalCtrl = ctrl
-      finalAnalysis = r
-      achievedPm = pm
-      achievedGc = fc
+    if ((atTiFloor && pmErr > 0) || (atTiCeil && pmErr < 0)) {
       converged = true
       if (pmErr > 0) {
         notes.push(
@@ -271,21 +252,17 @@ export function tuneVoltageLoop(
       }
       break
     }
-    // 相位裕度修正（PI 零点低于 fc 时贡献 +90° 相位提升）：
-    //   PM 高 → 减小 Ti（零点升频，相位贡献减少，滞后增加）
-    //   PM 低 → 增大 Ti（零点降频，相位贡献增加，滞后减少）
-    if (kind !== '2p2z') {
-      if (pmErr > 1.5) ti = clamp(ti * 0.65, sampleTime, 10.0)
-      else if (pmErr < -1.5) ti = clamp(ti * 1.4, sampleTime, 10.0)
-    }
-    finalCtrl = ctrl
-    finalAnalysis = r
-    achievedPm = pm
-    achievedGc = fc
+    // PM 高 → 减小 Ti（零点升频，相位贡献减少）；PM 低 → 增大 Ti
+    if (pmErr > 1.5) ti = clamp(ti * 0.65, sampleTime, 10.0)
+    else if (pmErr < -1.5) ti = clamp(ti * 1.4, sampleTime, 10.0)
   }
 
+  // 最终重建：用收敛后的最终 kp/ti 重新构建一次分析（保证 |OL(fc)| ≈ 1）
+  finalCtrl = makeController(kind, kp, ti, fc, hpRatio, zeroRatio, sampleTime, lpfCutoff)
+  finalAnalysis = build(finalCtrl)
+
   // 最终验证：完整分析（含全离散极点检查）
-  const final = finalAnalysis ?? build(finalCtrl)
+  const final = finalAnalysis
   const finalPm = final.marginsNominalDelay.phaseMarginDeg
   const finalGc = final.marginsNominalDelay.criticalGainCrossoverHz
   const finalGm = final.marginsNominalDelay.gainMarginDb
@@ -325,6 +302,19 @@ export function make2P2ZForTarget(
 }
 
 import { twoP2ZFromAnalogPolesZeros } from './digitalLoop.ts'
+
+
+/** 按控制器类型构造配置 */
+function makeController(
+  kind: TuneControllerKind, kp: number, ti: number, fc: number,
+  hpRatio: number, zeroRatio: number, sampleTime: number, lpfCutoff: number,
+): ControllerConfig {
+  switch (kind) {
+    case 'pi': return makePiConfig(kp, ti, sampleTime)
+    case 'pif': return makePifConfig(kp, ti, lpfCutoff, sampleTime)
+    case '2p2z': return make2P2ZForTarget(fc, hpRatio, sampleTime, kp, zeroRatio)
+  }
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(Math.max(v, lo), hi)
