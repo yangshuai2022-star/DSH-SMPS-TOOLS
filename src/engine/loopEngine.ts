@@ -130,6 +130,18 @@ export interface LoopTuneOutput {
   bodeAscii: string
 }
 
+/** 10 位小数格式化（浮点输出精度要求） */
+function fmt10(v: number): string {
+  return v.toFixed(10)
+}
+
+/** 带符号的差分方程项：+1.2345*x[k-1] / -1.2345*x[k-1] */
+function signTerm(coeff: number, varName: string): string {
+  if (Math.abs(coeff) < 1e-15) return ''
+  const sign = coeff >= 0 ? ' + ' : ' - '
+  return `${sign}${Math.abs(coeff).toFixed(10)}*${varName}`
+}
+
 /** 生成 Direct Form I C99 控制器代码（对应 export_controller_c99） */
 export function renderControllerC99(
   numerator: number[], denominator: number[],
@@ -233,6 +245,9 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
   const kind = controllerKind(result.controllerConfig)
   const cfg = result.controllerConfig
   const coefficients: Record<string, number> = {}
+  let numeratorZ = controller.numerator
+  let denominatorZ = controller.denominator
+  let differenceEquation = controller.differenceEquation()
   if (cfg.kind === 'pi') {
     coefficients.kp = cfg.kp
     coefficients.tiS = cfg.tiS
@@ -241,11 +256,22 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     coefficients.tiS = cfg.tiS
     coefficients.lpfCutoffHz = cfg.lpfCutoffHz
   } else {
-    coefficients.b0 = cfg.b0
-    coefficients.b1 = cfg.b1
-    coefficients.b2 = cfg.b2
-    coefficients.a1 = cfg.a1
-    coefficients.a2 = cfg.a2
+    // 2P2Z：统一输出 B0=1.0 归一化标准形式
+    //   H(z) = B0·(1 + B1·z⁻¹ + B2·z⁻²) / (1 + A1·z⁻¹ + A2·z⁻²)
+    //   B1 = b1/b0, B2 = b2/b0, A1 = a1, A2 = a2，B0 = b0 外置为增益
+    coefficients.B0 = cfg.b0
+    coefficients.B1 = cfg.b1 / cfg.b0
+    coefficients.B2 = cfg.b2 / cfg.b0
+    coefficients.A1 = cfg.a1
+    coefficients.A2 = cfg.a2
+    numeratorZ = [1, cfg.b1 / cfg.b0, cfg.b2 / cfg.b0]   // 内部分子（B0 外置）
+    denominatorZ = [1, cfg.a1, cfg.a2]
+    differenceEquation = 'y[k] = x[k]'
+      + signTerm(cfg.b1 / cfg.b0, 'x[k-1]')
+      + signTerm(cfg.b2 / cfg.b0, 'x[k-2]')
+      + signTerm(-cfg.a1, 'y[k-1]')
+      + signTerm(-cfg.a2, 'y[k-2]')
+      + '；输出 y_out[k] = B0·y[k]（B0 = ' + fmt10(cfg.b0) + '）'
   }
 
   const outMin = cfg.outputMin
@@ -278,9 +304,9 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
     controllerKind: kind,
     controller: {
       coefficients,
-      numeratorZ: controller.numerator,
-      denominatorZ: controller.denominator,
-      differenceEquation: controller.differenceEquation(),
+      numeratorZ,
+      denominatorZ,
+      differenceEquation,
       c99: renderControllerC99(controller.numerator, controller.denominator, 'llc_voltage_controller_run', outMin, outMax),
     },
     fixed: {
