@@ -176,6 +176,10 @@ export function tuneVoltageLoop(
   let lpfCutoff = target.lpfCutoffHz ?? 3500
   let hpRatio = target.highFrequencyPoleRatio ?? 4
   let zeroRatio = 2 // 2P2Z 零点位置：fc/zeroRatio、fc/(2·zeroRatio)
+  let zrLo = 0.5 // zeroRatio 二分下界（零点最高 fc/0.5 = 2fc）
+  let zrHi = 8.0 // zeroRatio 二分上界（零点最低 fc/8）
+  let hpLo = 0.8 // hpRatio 二分下界（极点最低 0.8fc）
+  let hpHi = 6.0 // hpRatio 二分上界（极点最高 6fc）
 
   const build = (ctrl: ControllerConfig) => buildDigitalLoopAnalysis(ssa, {
     controllerConfig: ctrl,
@@ -221,18 +225,40 @@ export function tuneVoltageLoop(
     achievedPm = pm
     achievedGc = fc
 
-    if (Math.abs(pmErr) < 1.5) {
+    if (Math.abs(pmErr) < 2.0) {
       converged = true
       break
     }
     if (kind === '2p2z') {
-      // 2P2Z：结构决定相位，增益已收敛即视为达标
-      converged = true
-      notes.push(
-        `2P2Z 结构在 fc=${fc.toFixed(0)} Hz 下可达 PM ${pm.toFixed(1)}°（目标 ${pmTarget}°）；` +
-        '如需要不同相位裕度，请调整目标带宽或零点/极点配置。',
-      )
-      break
+      // 2P2Z：两阶段结构迭代
+      //  阶段 A（iter<6）：zeroRatio 二分到下限（零点最高、超前最少）
+      //  阶段 B（iter>=6）：hpRatio 二分（降极点加滞后，PM↓）
+      if (iter < 6) {
+        if (pmErr > 0) zrHi = zeroRatio
+        else zrLo = zeroRatio
+        const next = Math.sqrt(zrLo * zrHi)
+        if (Math.abs(next - zeroRatio) / zeroRatio < 0.02) {
+          zeroRatio = next
+          hpLo = hpRatio
+        } else {
+          zeroRatio = next
+        }
+      } else {
+        // hpRatio 与 PM 正相关（极点高→滞后少→PM 高）：PM 高 → 降 hpRatio
+        if (pmErr > 0) hpHi = hpRatio
+        else hpLo = hpRatio
+        const next = Math.sqrt(hpLo * hpHi)
+        if (Math.abs(next - hpRatio) / hpRatio < 0.02) {
+          converged = true
+          notes.push(
+            `2P2Z 结构迭代收敛于 PM ${pm.toFixed(1)}°（目标 ${pmTarget}°）；` +
+            '如需精确相位裕度，请调整目标带宽或手动指定零极点。',
+          )
+          break
+        }
+        hpRatio = next
+      }
+      continue
     }
     // 物理极限检测：Ti 到边界仍无法达标
     const atTiFloor = ti <= sampleTime * 1.01
