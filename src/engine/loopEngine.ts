@@ -8,6 +8,7 @@ import { controllerTransferFunction, controllerKind } from '../control/digitalLo
 import {
   computeFixedPoint, fixedPointTable, renderFixedC99, renderFixedLibInitC99,
 } from '../control/qformat.ts'
+import { collectTuneAssumptions, type AssumptionReport } from './assumptions.ts'
 import { cloneSpec } from '../core/spec.ts'
 import {
   synthesizeTransformer, DEFAULT_SYNTHESIS_SETTINGS,
@@ -74,6 +75,8 @@ export interface LoopTuneRequest {
 export interface LoopTuneOutput {
   feasible: boolean
   converged: boolean
+  /** 参数假设报告 */
+  assumptions: AssumptionReport
   controllerKind: string
   controller: {
     coefficients: Record<string, number>
@@ -172,6 +175,7 @@ export function renderControllerC99(
 }
 
 export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
+  const assumptions = collectTuneAssumptions(request)
   let spec = buildSpec({
     vout: request.vout,
     pout: request.pout,
@@ -237,6 +241,7 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
 
   return {
     feasible: result.converged,
+    assumptions,
     converged: result.converged,
     controllerKind: kind,
     controller: {

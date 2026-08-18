@@ -5,6 +5,7 @@
 import type { LLCDesignSpec, PrimaryTopology } from '../core/spec.ts'
 import { DEFAULT_SPEC } from '../core/spec.ts'
 import { CORE_PRESETS, type FerriteCorePreset } from '../data/corePresets.ts'
+import { collectDesignAssumptions, type AssumptionReport } from './assumptions.ts'
 import {
   DEFAULT_SYNTHESIS_SETTINGS, synthesizeTransformer,
   type TransformerSynthesisResult, type TransformerWorkpoint,
@@ -48,6 +49,8 @@ export interface LlcDesignRequest {
 export interface LlcDesignOutput {
   method: string
   feasible: boolean
+  /** 参数假设报告：未显式提供的工程关键参数及其使用值（不脑补，显式标注） */
+  assumptions: AssumptionReport
   core: {
     presetKey: string
     partNumber: string
@@ -194,6 +197,7 @@ export function toOutput(result: TransformerSynthesisResult): LlcDesignOutput {
   return {
     method: 'proprietary-toolkit-v7.5',
     feasible: result.feasible,
+    assumptions: { assumed: [], missing: [] },
     core: {
       presetKey: core.presetKey,
       partNumber: core.partNumber,
@@ -317,6 +321,7 @@ function computeZvs(result: TransformerSynthesisResult) {
 
 /** 顶层设计入口 */
 export function designLlc(request: LlcDesignRequest): LlcDesignOutput {
+  const assumptions = collectDesignAssumptions(request)
   const preset = resolveCorePreset(request.corePreset)
   const spec = buildSpec(request)
   const result = synthesizeTransformer(spec, {
@@ -350,7 +355,9 @@ export function designLlc(request: LlcDesignRequest): LlcDesignOutput {
     workpointScope: request.workpointScope ?? DEFAULT_SYNTHESIS_SETTINGS.workpointScope,
     maxFluxDensityT: request.maxFluxDensityT ?? DEFAULT_SYNTHESIS_SETTINGS.maxFluxDensityT,
   })
-  return toOutput(result)
+  const out = toOutput(result)
+  out.assumptions = assumptions
+  return out
 }
 
 /**

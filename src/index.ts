@@ -28,7 +28,9 @@ function registerDesignTool(ctx: Context) {
       '按专有 LLC 谐振变换器设计算法（Power Design Toolkit V7.5）完成变压器和谐振参数设计。' +
       '输入：输出电压(V)、输出功率(W)、谐振频率(kHz)、可选母线电压范围/拓扑(K、Q、磁芯预设)。' +
       '输出：整数匝数对(Np:Ns)、Lr/Lm/Cr、气隙、Litz 线规、窗口填充、磁芯/铜损与工作点表。' +
-      '单位：电压 V、功率 W、频率 kHz。典型：vout=53, pout=3000, frKhz=100, vinNom=400。',
+      '单位：电压 V、功率 W、频率 kHz。典型：vout=53, pout=3000, frKhz=100, vinNom=400。' +
+      '建议尽量提供：母线电压范围(vinNom/vinMinNormal/vinMax/vinHoldEnd)、k、q、corePreset；' +
+      '未提供的参数会使用默认值并在结果中明确标注，请确认后再采用。',
 
     parameters: {
       // 必填
@@ -104,6 +106,7 @@ function formatResult(r: LlcDesignOutput): string {
     `标称损耗：磁芯 ${fmt(r.loss.coreW)} W + 原边铜损 ${fmt(r.loss.primaryCopperW)} W + 副边铜损 ${fmt(r.loss.secondaryCopperW)} W = ${fmt(r.loss.totalW)} W（热点 ${fmt(r.loss.estimatedHotspotC)} ℃）`,
     `可行性：${r.feasible ? '可行' : '不可行'}`,
   ]
+  appendAssumptions(lines, r.assumptions)
 
   if (r.workpoints.length > 0) {
     lines.push('', '工作点：')
@@ -133,7 +136,9 @@ function registerTuneLoopTool(ctx: Context) {
       'LLC 数字电压环一键自动整定（Power Design Toolkit 算法）。' +
       '输入电源规格 + 目标穿越频率/相位裕度，自动设计 PI/PIF/2P2Z 控制器参数，' +
       '返回控制器系数、差异方程、FM 工作点、稳定裕度与可直接烧录的 C99 代码。' +
-      '单位：电压 V、功率 W、频率 kHz。典型：vout=24, pout=500, frKhz=120, crossoverKhz=2, phaseMarginDeg=50。',
+      '单位：电压 V、功率 W、频率 kHz。典型：vout=24, pout=500, frKhz=120, crossoverKhz=2, phaseMarginDeg=50。' +
+      '建议尽量提供：母线电压范围、k、q、目标穿越频率(crossoverKhz)与相位裕度(phaseMarginDeg)、采样周期(sampleTimeUs)；' +
+      '未提供的参数会使用默认值并在结果中明确标注，请确认后再采用。',
 
     parameters: {
       vout: { type: 'number', required: true, description: '输出电压 Vout（V）' },
@@ -192,6 +197,7 @@ function formatTuneResult(r: LoopTuneOutput): string {
     lines.push('', '警告：')
     for (const w of r.warnings) lines.push(`  - ${w}`)
   }
+  appendAssumptions(lines, r.assumptions)
   lines.push('', '═══ 32 位定点（IQ27 数据域 / IQ20·IQ24·IQ27 系数域）═══')
   lines.push('定点整数参数（可直接烧录）：')
   for (const [name, c] of Object.entries(r.fixed.coefficients)) {
@@ -219,4 +225,17 @@ function formatTuneResult(r: LoopTuneOutput): string {
   lines.push(r.controller.c99)
   lines.push('```')
   return lines.join('\n')
+}
+
+/** 渲染参数假设/缺失提示（不脑补原则） */
+function appendAssumptions(lines: string[], a: { assumed: Array<{ param: string; value: string; why: string }>; missing: string[] }): void {
+  if (a.missing.length > 0) {
+    lines.push('', `⚠️ 缺失关键参数（建议提供）：${a.missing.join('、')}`)
+  }
+  if (a.assumed.length > 0) {
+    lines.push('', '⚠️ 以下参数未显式提供，使用了默认值 —— 请确认：')
+    for (const item of a.assumed) {
+      lines.push(`  - ${item.param} = ${item.value}（${item.why}）`)
+    }
+  }
 }
