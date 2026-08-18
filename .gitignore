@@ -4,3 +4,6 @@ lib/
 .npm-cache/
 corepack/
 .pnpm-store/
+q2/
+tune2/
+lin/
