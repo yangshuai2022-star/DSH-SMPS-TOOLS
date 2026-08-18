@@ -117,6 +117,82 @@ export function compute2P2ZFixed(
   }
 }
 
+/**
+ * 2P2Z 归一化定点（B0 = 1.0 标准形式）：
+ *   H(z) = B0 · (1 + B1·z⁻¹ + B2·z⁻²) / (1 + A1·z⁻¹ + A2·z⁻²)
+ *   B1 = b1/b0, B2 = b2/b0, A1 = a1, A2 = a2，B0 = b0 外置为增益
+ * 定点域：B1/B2/A1/A2 全 IQ27；B0 为增益（IQ20，与 fx_ctrl_iq27.h 增益类系数一致）
+ */
+export function compute2P2ZNormalizedFixed(
+  b0: number, b1: number, b2: number, a1: number, a2: number,
+  outMax = 1.0, outMin = 0.0,
+): {
+  B0: FixedCoeff
+  B1: FixedCoeff
+  B2: FixedCoeff
+  A1: FixedCoeff
+  A2: FixedCoeff
+  outMax: FixedCoeff
+  outMin: FixedCoeff
+} {
+  if (Math.abs(b0) < 1e-12) throw new Error('2P2Z 归一化要求 b0 ≠ 0（增益外置前 b0 不可为零）')
+  return {
+    B0: quantize(b0, Q20),
+    B1: quantize(b1 / b0, Q27),
+    B2: quantize(b2 / b0, Q27),
+    A1: quantize(a1, Q27),
+    A2: quantize(a2, Q27),
+    outMax: quantize(outMax, Q27),
+    outMin: quantize(outMin, Q27),
+  }
+}
+
+/** 自包含 int32 定点代码：2P2Z 归一化（B0 外置增益）DF-IIt */
+export function renderFixed2P2ZNormalizedC99(
+  fx: ReturnType<typeof compute2P2ZNormalizedFixed>, prefix = 'vloop',
+): string {
+  const cint = (v: number): string => String(v)
+  const lines = [
+    '/* ============================================================',
+    ' * 32 位定点 2P2Z —— 归一化形式（B0 外置增益，DF-IIt 转置直接 II 型）',
+    ' *   H(z) = B0·(1 + B1·z⁻¹ + B2·z⁻²) / (1 + A1·z⁻¹ + A2·z⁻²)',
+    ' *   B1/B2/A1/A2 全 IQ27；B0 增益 IQ20（约定对齐 fx_ctrl_iq27.h）',
+    ' * 状态 = 输出量纲部分和，|s1| ≤ |B1+B2| + |A1+A2|（B 归一化后恒 ≤ 4）',
+    ' * ============================================================ */',
+    '#include <stdint.h>',
+    '',
+    `/* 归一化系数（全 IQ27） */
+#define ${prefix.toUpperCase()}_B1_IQ27 ${cint(fx.B1.int)}   /* ${fx.B1.float.toPrecision(10)} */
+#define ${prefix.toUpperCase()}_B2_IQ27 ${cint(fx.B2.int)}   /* ${fx.B2.float.toPrecision(10)} */
+#define ${prefix.toUpperCase()}_A1_IQ27 ${cint(fx.A1.int)}   /* ${fx.A1.float.toPrecision(10)} */
+#define ${prefix.toUpperCase()}_A2_IQ27 ${cint(fx.A2.int)}   /* ${fx.A2.float.toPrecision(10)} */
+/* 外置增益 B0（IQ20） */
+#define ${prefix.toUpperCase()}_B0_IQ20 ${cint(fx.B0.int)}   /* ${fx.B0.float.toPrecision(10)} × 2^20 */
+#define ${prefix.toUpperCase()}_OUT_MAX (${cint(fx.outMax.int)})
+#define ${prefix.toUpperCase()}_OUT_MIN (${cint(fx.outMin.int)})
+static int32_t ${prefix}_s1 = 0, ${prefix}_s2 = 0;   /* IQ27 状态 */
+static inline int32_t ${prefix}_run(int32_t x)
+{
+    int32_t y_inner, y_out;
+    /* 内部 2P2Z（B0=1）：y_inner = x + s1 */
+    y_inner = ${prefix}_s1 + x;
+    if(y_inner > ${prefix.toUpperCase()}_OUT_MAX) { y_inner = ${prefix.toUpperCase()}_OUT_MAX; }
+    if(y_inner < ${prefix.toUpperCase()}_OUT_MIN) { y_inner = ${prefix.toUpperCase()}_OUT_MIN; }
+    ${prefix}_s1 = (int32_t)(((int64_t)${prefix.toUpperCase()}_B1_IQ27 * x) >> ${Q27})
+                 - (int32_t)(((int64_t)${prefix.toUpperCase()}_A1_IQ27 * y_inner) >> ${Q27}) + ${prefix}_s2;
+    ${prefix}_s2 = (int32_t)(((int64_t)${prefix.toUpperCase()}_B2_IQ27 * x) >> ${Q27})
+                 - (int32_t)(((int64_t)${prefix.toUpperCase()}_A2_IQ27 * y_inner) >> ${Q27});
+    /* 外置增益：y_out = B0·y_inner（IQ20 增益 × IQ27 数据 → IQ27） */
+    y_out = (int32_t)(((int64_t)${prefix.toUpperCase()}_B0_IQ20 * y_inner) >> ${Q20});
+    if(y_out > ${prefix.toUpperCase()}_OUT_MAX) { y_out = ${prefix.toUpperCase()}_OUT_MAX; }
+    if(y_out < ${prefix.toUpperCase()}_OUT_MIN) { y_out = ${prefix.toUpperCase()}_OUT_MIN; }
+    return y_out;
+}`,
+    '',
+  ]
+  return lines.join('\n')
+}
+
 /** 控制器配置 → 定点参数全集（含 fail-fast 检查与溢出核算） */
 export function computeFixedPoint(config: ControllerConfig): FixedPointResult {
   const kind = config.kind

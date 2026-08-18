@@ -181,9 +181,9 @@ function formatTuneResult(r: LoopTuneOutput): string {
     'LLC 电压环自动整定结果（Power Design Toolkit 算法）',
     '='.repeat(64),
     `控制器：${r.controllerKind.toUpperCase()}（${r.converged ? '已收敛' : '未完全收敛'}）`,
-    `系数：${JSON.stringify(r.controller.coefficients)}`,
-    `z 域传函：num = [${r.controller.numeratorZ.map(v => v.toPrecision(6)).join(', ')}]`,
-    `         den = [${r.controller.denominatorZ.map(v => v.toPrecision(6)).join(', ')}]`,
+    `系数（10 位小数）：${JSON.stringify(r.controller.coefficients)}`,
+    `z 域传函：num = [${r.controller.numeratorZ.map(v => v.toFixed(10)).join(', ')}]`,
+    `         den = [${r.controller.denominatorZ.map(v => v.toFixed(10)).join(', ')}]`,
     `差异方程：${r.controller.differenceEquation}`,
     `工作点：fsw = ${r.operatingPoint.fswKhz.toFixed(1)} kHz，FM command = ${r.operatingPoint.fmCommandPu.toFixed(4)}，FM 增益 = ${r.operatingPoint.fmGainHzPerPu.toExponential(3)} Hz/pu`,
     `稳定裕度：穿越 ${r.margins.crossoverHz.toFixed(1)} Hz，相位裕度 ${r.margins.phaseMarginDeg.toFixed(1)}°，增益裕度 ${r.margins.gainMarginDb.toFixed(1)} dB`,
@@ -202,7 +202,19 @@ function formatTuneResult(r: LoopTuneOutput): string {
   lines.push('', '═══ 32 位定点（IQ27 数据域 / IQ20·IQ24·IQ27 系数域）═══')
   lines.push('定点整数参数（可直接烧录）：')
   for (const [name, c] of Object.entries(r.fixed.coefficients)) {
-    lines.push(`  ${name.padEnd(8)} = ${c.int}（Q${c.q}，浮点 ${c.float.toPrecision(6)}）`)
+    lines.push(`  ${name.padEnd(8)} = ${c.int}（Q${c.q}，浮点 ${c.float.toFixed(10)}）`)
+  }
+  if (r.normalized2P2Z) {
+    lines.push('', '▶ 归一化 2P2Z（B0 = 1.0 标准形式，DF-IIt）：')
+    lines.push('  H(z) = B0·(1 + B1·z⁻¹ + B2·z⁻²) / (1 + A1·z⁻¹ + A2·z⁻²)')
+    lines.push('  浮点（10 位小数）：')
+    const nf = r.normalized2P2Z.float
+    lines.push(`    B0 = ${nf.B0.toFixed(10)}   B1 = ${nf.B1.toFixed(10)}   B2 = ${nf.B2.toFixed(10)}`)
+    lines.push(`    A1 = ${nf.A1.toFixed(10)}   A2 = ${nf.A2.toFixed(10)}`)
+    lines.push('  定点整数（B1/B2/A1/A2 全 IQ27，B0 增益 IQ20）：')
+    for (const [name, c] of Object.entries(r.normalized2P2Z.fixed)) {
+      lines.push(`    ${name.padEnd(3)} = ${String(c.int).padStart(12)}   Q${c.q}  （浮点 ${c.float.toFixed(10)}）`)
+    }
   }
   if (r.fixed.checks.length > 0) {
     lines.push('', '定点 fail-fast 检查：')
@@ -215,7 +227,7 @@ function formatTuneResult(r: LoopTuneOutput): string {
   }
   lines.push('', '自包含 int32 定点代码（零浮点运行时）：')
   lines.push('```c')
-  lines.push(r.fixed.c99)
+  lines.push(r.normalized2P2Z ? r.normalized2P2Z.c99 : r.fixed.c99)
   lines.push('```')
   lines.push('', '对接定点库 fx_ctrl_iq27.h 的初始化：')
   lines.push('```c')

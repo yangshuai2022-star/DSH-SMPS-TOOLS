@@ -7,6 +7,7 @@ import { tuneVoltageLoop, type TuningResult } from '../control/autotune.ts'
 import { controllerTransferFunction, controllerKind } from '../control/digitalLoop.ts'
 import {
   computeFixedPoint, fixedPointTable, renderFixedC99, renderFixedLibInitC99,
+  compute2P2ZNormalizedFixed, renderFixed2P2ZNormalizedC99,
 } from '../control/qformat.ts'
 import { collectTuneAssumptions, type AssumptionReport } from './assumptions.ts'
 import { renderAsciiBode } from './asciiBode.ts'
@@ -86,6 +87,15 @@ export interface LoopTuneOutput {
     numeratorZ: number[]
     denominatorZ: number[]
     differenceEquation: string
+    c99: string
+  }
+  /** 2P2Z 归一化系数（B0 = 1.0 标准形式，仅 controllerKind=2p2z 时存在） */
+  normalized2P2Z?: {
+    /** 归一化浮点系数（B1=b1/b0, B2=b2/b0, A1=a1, A2=a2，B0=b0 外置增益） */
+    float: { B0: number; B1: number; B2: number; A1: number; A2: number }
+    /** 归一化定点整数（B1/B2/A1/A2 全 IQ27，B0 增益 IQ20） */
+    fixed: Record<string, { float: number; q: number; int: number }>
+    /** 归一化 DF-IIt C99 代码（B0 外置增益） */
     c99: string
   }
   /** 32 位定点输出（IQ27 数据域 / IQ20·IQ24·IQ27 系数域，对齐 DSP_CTRL_CODE 定点库） */
@@ -243,10 +253,27 @@ export function runLoopTune(request: LoopTuneRequest): LoopTuneOutput {
 
   // 32 位定点：系数 + 自包含代码 + 库对接代码 + fail-fast
   const fx = computeFixedPoint(result.controllerConfig)
+  const normalized2P2Z = kind === '2p2z' && cfg.kind === '2p2z'
+    ? (() => {
+        const nf = compute2P2ZNormalizedFixed(cfg.b0, cfg.b1, cfg.b2, cfg.a1, cfg.a2, outMax, outMin)
+        return {
+          float: { B0: cfg.b0, B1: cfg.b1 / cfg.b0, B2: cfg.b2 / cfg.b0, A1: cfg.a1, A2: cfg.a2 },
+          fixed: {
+            B0: { float: nf.B0.float, q: nf.B0.q, int: nf.B0.int },
+            B1: { float: nf.B1.float, q: nf.B1.q, int: nf.B1.int },
+            B2: { float: nf.B2.float, q: nf.B2.q, int: nf.B2.int },
+            A1: { float: nf.A1.float, q: nf.A1.q, int: nf.A1.int },
+            A2: { float: nf.A2.float, q: nf.A2.q, int: nf.A2.int },
+          },
+          c99: renderFixed2P2ZNormalizedC99(nf, 'vloop'),
+        }
+      })()
+    : undefined
 
   return {
     feasible: result.converged,
     assumptions,
+    normalized2P2Z,
     converged: result.converged,
     controllerKind: kind,
     controller: {
