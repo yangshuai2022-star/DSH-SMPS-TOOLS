@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "declaration": true,
+    "declarationDir": "lib/types",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,6 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.npm-cache/
+corepack/
+.pnpm-store/

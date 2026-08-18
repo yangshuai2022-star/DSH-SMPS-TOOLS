@@ -1,0 +1,16 @@
+{
+  "spec": {
+    "vbus_nom_v": 400.0,
+    "vbus_min_normal_v": 380.0,
+    "vbus_max_v": 420.0,
+    "vbus_hold_end_v": 330.0,
+    "vout_v": 24.0,
+    "pout_w": 500.0,
+    "primary_topology": "HALF_BRIDGE",
+    "resonant_frequency_hz": 120000.0,
+    "minimum_frequency_hz": 70000.0,
+    "maximum_frequency_hz": 200000.0,
+    "ln_ratio": 5.0,
+    "q_full_load": 0.4
+  }
+}

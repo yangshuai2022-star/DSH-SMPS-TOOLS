@@ -1,0 +1,10 @@
+# LLC 设计插件 —— 开发期加载示例（--patch）
+#
+# 用法（从 deepseek-harness 源码仓库根目录运行）：
+#   pnpm dsh web --patch /home/yangshuai/task/llc-design-plugin/cordis.yml
+#
+# 注意：name 必须是本插件的绝对路径（源码 .ts 文件）。
+
+- insert:
+    - id: llc-design-plugin
+      name: '/home/yangshuai/task/llc-design-plugin/src/index.ts'
